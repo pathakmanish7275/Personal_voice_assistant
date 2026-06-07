@@ -1,0 +1,33 @@
+# Experiment stack: ONLY the STT and TTS providers run in Docker.
+# The agent and Ollama run natively on the host ("in the open"), so you can
+# iterate on agent code without rebuilds. Bring these up, then run the agent in
+# console mode pointed at them (see experiment.sh).
+#
+#   docker compose -f docker-compose.dev.yml up -d --build
+
+services:
+  stt:
+    build:
+      context: .
+      dockerfile: Dockerfile.services
+    image: pva-services:latest
+    command: python stt_server.py
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      STT_PORT: "8001"
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+
+  tts:
+    build:
+      context: .
+      dockerfile: Dockerfile.services
+    image: pva-services:latest
+    command: python tts_server.py
+    environment:
+      TTS_VOICE: ${TTS_VOICE:-af_heart}
+      TTS_PORT: "8002"
+    ports:
+      - "8002:8002"
+    restart: unless-stopped

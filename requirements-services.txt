@@ -1,0 +1,5 @@
+# Deps for the standalone STT/TTS OpenAI-compatible servers (no livekit needed).
+aiohttp
+faster-whisper
+kokoro-onnx
+numpy

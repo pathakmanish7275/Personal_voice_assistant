@@ -32,12 +32,13 @@ done
 OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 WHISPER_MODEL="${WHISPER_MODEL:-base}"  # tiny|base|small|medium|large-v3
 
-# ── activate venv ──────────────────────────────────────────────────────────
-if [ -f ".venv/bin/activate" ]; then
-    source .venv/bin/activate
-else
-    warn "No .venv found — using system Python. Run: python3 -m venv .venv && pip install -r requirements.txt"
+# ── activate venv (create on first run) ─────────────────────────────────────
+if [ ! -f ".venv/bin/activate" ]; then
+    info "No .venv found — creating one..."
+    python3 -m venv .venv || die "venv creation failed"
+    INSTALL=true   # fresh venv needs dependencies
 fi
+source .venv/bin/activate
 
 PYTHON="$(command -v python || command -v python3)"
 [ -z "$PYTHON" ] && die "Python not found."
