@@ -51,8 +51,13 @@ edit and re-run agent code instantly. No LiveKit/browser involved.
 ```bash
 OLLAMA_HOST=0.0.0.0 ollama serve     # native, in another terminal
 ./experiment.sh                      # builds STT/TTS containers, then talk via mic
+./experiment.sh --agent-only         # skip Docker; relaunch agent against running containers
 ./experiment.sh --down               # stop the STT/TTS containers when done
 ```
+
+`--agent-only` is handy for fast iteration (tweak agent code, relaunch without
+touching containers) and when your shell lacks docker-group access but the
+containers are already up.
 
 Under the hood `experiment.sh` brings up `docker-compose.dev.yml` (the `stt` and
 `tts` services on ports 8001/8002), waits for health, then launches the agent in

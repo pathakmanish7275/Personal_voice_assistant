@@ -19,14 +19,25 @@ die()  { echo -e "${RED}[fail]${NC}  $*" >&2; exit 1; }
 
 COMPOSE="docker compose -f docker-compose.dev.yml"
 
-if [ "${1:-}" = "--down" ]; then
-    info "Stopping STT/TTS containers..."
-    $COMPOSE down
-    ok "Stopped."
-    exit 0
-fi
+AGENT_ONLY=false
+case "${1:-}" in
+    --down)
+        info "Stopping STT/TTS containers..."
+        $COMPOSE down
+        ok "Stopped."
+        exit 0
+        ;;
+    --agent-only|--talk)
+        # Skip Docker entirely; just run the agent against already-running
+        # STT/TTS containers. Useful for fast iteration, or when this shell
+        # lacks docker-group access but the containers are already up.
+        AGENT_ONLY=true
+        ;;
+esac
 
-command -v docker >/dev/null || die "Docker not found. Install Docker, then re-run."
+if [ "$AGENT_ONLY" = false ]; then
+    command -v docker >/dev/null || die "Docker not found. Install Docker, then re-run."
+fi
 
 # ── venv ─────────────────────────────────────────────────────────────────────
 if [ ! -f ".venv/bin/activate" ]; then
@@ -44,14 +55,16 @@ curl -sf --max-time 2 "http://localhost:$OLLAMA_PORT/api/tags" >/dev/null 2>&1 \
 ok "Ollama → http://localhost:$OLLAMA_PORT"
 
 # ── STT/TTS containers ───────────────────────────────────────────────────────
-info "Building & starting STT/TTS containers (first run downloads ~480MB of models)..."
-$COMPOSE up -d --build || die "docker compose failed"
+if [ "$AGENT_ONLY" = false ]; then
+    info "Building & starting STT/TTS containers (first run downloads ~480MB of models)..."
+    $COMPOSE up -d --build || die "docker compose failed"
+fi
 
 info "Waiting for STT (:8001) and TTS (:8002) to be ready..."
 curl -s --retry 30 --retry-connrefused --retry-delay 1 --max-time 90 http://localhost:8001/health >/dev/null \
-    || die "STT server did not become healthy"
+    || die "STT not reachable on :8001. Start the containers first (run without --agent-only)."
 curl -s --retry 30 --retry-connrefused --retry-delay 1 --max-time 90 http://localhost:8002/health >/dev/null \
-    || die "TTS server did not become healthy"
+    || die "TTS not reachable on :8002. Start the containers first (run without --agent-only)."
 ok "STT → http://localhost:8001   TTS → http://localhost:8002"
 
 # ── Run the agent natively, pointed at the Docker providers ───────────────────
