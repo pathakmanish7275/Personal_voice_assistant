@@ -1,0 +1,25 @@
+# Single HTTPS origin for the whole stack so browsers grant mic access
+# (getUserMedia requires a secure context). Uses Caddy's internal CA / a
+# self-signed cert — each device accepts the warning once.
+#
+# The site address comes from the SITE_ADDRESS env var (set in docker-compose
+# from LIVEKIT_NODE_IP), e.g. https://192.168.1.9
+{
+	local_certs
+}
+
+{$SITE_ADDRESS} {
+	# Static web client
+	root * /srv/web
+	file_server
+
+	# Token minting
+	handle_path /token* {
+		reverse_proxy token:8080
+	}
+
+	# LiveKit signaling WebSocket (media still flows direct over UDP)
+	handle /rtc* {
+		reverse_proxy livekit:7880
+	}
+}

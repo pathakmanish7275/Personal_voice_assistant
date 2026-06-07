@@ -1,0 +1,83 @@
+# Self-hosted LAN voice-assistant stack.
+# Ollama is intentionally NOT here — it runs natively on the host (for GPU) and
+# the agent reaches it via host.docker.internal.
+#
+# Required in .env: LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_NODE_IP,
+# LIVEKIT_WS_PUBLIC, OLLAMA_BASE_URL, OLLAMA_MODEL, WHISPER_MODEL, TTS_VOICE.
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml --node-ip ${LIVEKIT_NODE_IP}
+    environment:
+      # key -> secret, must match the token server / agent
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50100:50000-50100/udp"
+    depends_on:
+      - redis
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    image: personal_voice_assistant:latest
+    restart: unless-stopped
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+      WHISPER_MODEL: ${WHISPER_MODEL}
+      TTS_VOICE: ${TTS_VOICE}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - livekit
+
+  token:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    image: personal_voice_assistant:latest
+    restart: unless-stopped
+    command: python token_server.py
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_WS_PUBLIC: ${LIVEKIT_WS_PUBLIC}
+      TOKEN_PORT: "8080"
+    expose:
+      - "8080"
+    depends_on:
+      - livekit
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: "https://${LIVEKIT_NODE_IP}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./web:/srv/web:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "443:443"
+    depends_on:
+      - token
+      - livekit
+
+volumes:
+  caddy_data:
+  caddy_config:

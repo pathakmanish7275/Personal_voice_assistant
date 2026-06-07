@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Secrets / local config
+.env
+*.bak
+.env.legacy.bak
+
+# Runtime
+logs/
+*.log
+
+# Caddy state (created by docker compose)
+caddy_data/
+caddy_config/
+
+# Stray model artifacts (should be baked into the image, not committed)
+*.onnx
+*.bin
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local tooling
+.claude/settings.local.json

@@ -1,0 +1,40 @@
+# Headless voice agent for LiveKit room mode.
+# Whisper + Kokoro model files are baked in so containers never download at runtime.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
+
+# System libs: ffmpeg (audio decode), libgomp1 (onnxruntime/ctranslate2 OpenMP).
+# No libportaudio — room mode has no local mic/speakers.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libgomp1 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+# ── Bake models (no runtime downloads) ──────────────────────────────────────
+# Kokoro TTS — same files/URLs that tts_kokoro.py expects in ~/.cache/kokoro-onnx
+RUN mkdir -p /root/.cache/kokoro-onnx && \
+    curl -L -o /root/.cache/kokoro-onnx/kokoro-v1.0.onnx \
+        https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx && \
+    curl -L -o /root/.cache/kokoro-onnx/voices-v1.0.bin \
+        https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+
+# Whisper STT — populate the HuggingFace cache layer for the configured model
+ARG WHISPER_MODEL=base
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8')"
+
+# Silero VAD ships inside livekit-plugins-silero — nothing to download.
+
+COPY . .
+
+# Connects to the LiveKit server and waits for dispatch into rooms.
+# Reads LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET from the environment.
+CMD ["python", "agent.py", "start"]

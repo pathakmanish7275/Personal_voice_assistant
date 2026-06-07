@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.git/
+.gitignore
+logs/
+*.log
+.env
+*.bak
+.env.legacy.bak
+caddy_data/
+caddy_config/
+.DS_Store
+README.md

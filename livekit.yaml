@@ -1,0 +1,19 @@
+# Self-hosted LiveKit server config for a single-host LAN deployment.
+# Keys and node IP are injected at runtime by docker-compose (LIVEKIT_KEYS env
+# and the --node-ip flag) so they stay in sync with .env without relying on
+# in-file env substitution.
+port: 7880
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  # On a LAN we advertise the host's LAN IP directly (set via --node-ip) so other
+  # devices can reach the WebRTC media; no STUN/external IP discovery.
+  use_external_ip: false
+
+redis:
+  address: redis:6379
+
+logging:
+  level: info
