@@ -16,8 +16,8 @@ from typing import Any
 import httpx
 
 from livekit.agents import llm
-from livekit.agents.llm import ChatChunk, ChoiceDelta
-from livekit.agents.llm import ToolChoice
+from livekit.agents.llm import ChatChunk, ChoiceDelta, FunctionToolCall, ToolChoice, is_function_tool
+from livekit.agents.llm.utils import build_legacy_openai_schema
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -26,6 +26,38 @@ from livekit.agents.types import (
 )
 
 logger = logging.getLogger("llm_ollama")
+
+
+def _ollama_tools(tools: list) -> list[dict]:
+    """Convert livekit function tools to Ollama/OpenAI tool schemas."""
+    return [build_legacy_openai_schema(t) for t in tools if is_function_tool(t)]
+
+
+def _fix_tool_call_args(messages: list[dict]) -> list[dict]:
+    """to_provider_format('openai') serializes tool-call arguments as a JSON string,
+    but Ollama's /api/chat wants an object. Convert them in place (on a copy)."""
+    out = []
+    for m in messages:
+        tcs = m.get("tool_calls")
+        if not tcs:
+            out.append(m)
+            continue
+        m = dict(m)
+        new_tcs = []
+        for tc in tcs:
+            tc = dict(tc)
+            fn = dict(tc.get("function", {}))
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                try:
+                    fn["arguments"] = json.loads(args) if args.strip() else {}
+                except json.JSONDecodeError:
+                    fn["arguments"] = {}
+            tc["function"] = fn
+            new_tcs.append(tc)
+        m["tool_calls"] = new_tcs
+        out.append(m)
+    return out
 
 
 class OllamaLLM(llm.LLM):
@@ -102,8 +134,9 @@ class _OllamaStream(llm.LLMStream):
 
     async def _run(self) -> None:
         # to_provider_format('openai') returns OpenAI-style message dicts —
-        # Ollama's /api/chat accepts the same format.
+        # Ollama's /api/chat accepts the same format (after fixing tool-call args).
         messages, _ = self._chat_ctx.to_provider_format("openai")
+        messages = _fix_tool_call_args(messages)
 
         payload: dict[str, Any] = {
             "model": self._model,
@@ -111,6 +144,9 @@ class _OllamaStream(llm.LLMStream):
             "think": self._think,
             "stream": True,
         }
+        tools = _ollama_tools(self._tools)
+        if tools:
+            payload["tools"] = tools
         if self._temperature is not None:
             payload["options"] = {"temperature": self._temperature}
 
@@ -130,12 +166,34 @@ class _OllamaStream(llm.LLMStream):
                 except json.JSONDecodeError:
                     continue
 
-                content = data.get("message", {}).get("content", "")
+                msg = data.get("message", {})
+
+                content = msg.get("content", "")
                 if content:
                     self._event_ch.send_nowait(
                         ChatChunk(
                             id=req_id,
                             delta=ChoiceDelta(role="assistant", content=content),
+                        )
+                    )
+
+                for tc in msg.get("tool_calls") or []:
+                    fn = tc.get("function", {})
+                    args = fn.get("arguments", {})
+                    self._event_ch.send_nowait(
+                        ChatChunk(
+                            id=req_id,
+                            delta=ChoiceDelta(
+                                role="assistant",
+                                tool_calls=[
+                                    FunctionToolCall(
+                                        type="function",
+                                        name=fn.get("name", ""),
+                                        arguments=args if isinstance(args, str) else json.dumps(args),
+                                        call_id=tc.get("id") or f"call_{uuid.uuid4().hex[:8]}",
+                                    )
+                                ],
+                            ),
                         )
                     )
 

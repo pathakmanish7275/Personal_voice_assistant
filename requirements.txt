@@ -5,3 +5,4 @@ python-dotenv
 faster-whisper
 kokoro-onnx
 numpy
+aiohttp
