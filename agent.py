@@ -92,5 +92,9 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             agent_name="voice-agent",
+            # In-process STT (faster-whisper) + TTS (Kokoro) + VAD use ~900MB per
+            # job; the 500MB default warn threshold is too low for this stack.
+            # (limit stays 0 = no hard cap, so jobs are never killed.)
+            job_memory_warn_mb=2000,
         )
     )
