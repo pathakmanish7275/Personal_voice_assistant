@@ -130,7 +130,7 @@ stt_whisper.py        In-process faster-whisper STT plugin (provider: local)
 tts_kokoro.py         In-process Kokoro TTS plugin (provider: local)
 stt_server.py         OpenAI-compatible Whisper server (provider: openai/docker)
 tts_server.py         OpenAI-compatible Kokoro server (provider: openai/docker)
-tools.py              Function tools (empty placeholder for now)
+tools.py              Function tools (search_my_work: local RAG over the user's notes)
 token_server.py       Mints browser JWTs + dispatches the agent
 web/index.html        Browser client (livekit-client)
 experiment.sh         One-click: STT/TTS in Docker + native agent console
@@ -146,4 +146,4 @@ smoke_test.py         Headless pipeline check
 
 ## License
 
-Personal project.
+Released under the [MIT License](LICENSE).
