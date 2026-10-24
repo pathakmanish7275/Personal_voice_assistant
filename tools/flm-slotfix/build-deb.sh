@@ -42,7 +42,9 @@ if [ ! -d "$WORK/src/.git" ]; then
     git clone -q --depth 1 --branch "$FLM_TAG" https://github.com/ROCm/FastFlowLM.git "$WORK/src"
     git -C "$WORK/src" submodule update -q --init --recursive --depth 1
 fi
-git -C "$WORK/src" checkout -q -- src/server
+# Reset every tracked source file first, so nothing from an earlier experiment
+# in this cached tree can end up in the package.
+git -C "$WORK/src" checkout -q -- src
 git -C "$WORK/src" apply "$HERE/connection-slot-release.patch"
 grep -q "release_slot" "$WORK/src/src/server/server.cpp"
 
