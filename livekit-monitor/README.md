@@ -8,7 +8,7 @@ Tracks: `livekit-server`, `redis`, `agent`, `dispatcher`, `web (token)`.
 
 ## Run
 
-Use the agent venv (it already has `psutil`):
+Use the repo's venv (`./stack.sh --monitor` installs `psutil` into it if missing):
 
 ```bash
 cd livekit-monitor

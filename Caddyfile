@@ -3,7 +3,7 @@
 # self-signed cert — each device accepts the warning once.
 #
 # The site address comes from the SITE_ADDRESS env var (set in docker-compose
-# from LIVEKIT_NODE_IP), e.g. https://192.168.1.9
+# from LIVEKIT_NODE_IP), e.g. https://<LAN-IP>
 {
 	local_certs
 }

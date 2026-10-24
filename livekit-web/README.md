@@ -1,8 +1,10 @@
 # LiveKit Web — lightweight voice-bot front-end
 
-A single vanilla HTML page (LiveKit browser client from CDN, no build step) plus a
-tiny FastAPI token server. Joins a `ws-` room so your dispatcher auto-dispatches
-`voice-agent`.
+A single vanilla HTML page (no build step) plus a tiny FastAPI token server.
+The LiveKit browser client is vendored in `static/` (pinned to 2.16.1 — newer
+clients probe a signal path the bundled livekit-server 1.9.9 doesn't serve), so
+the page works offline. Joins a `ws-` room so the dispatcher auto-dispatches
+`voice-agent`. Normally started by `../stack.sh`.
 
 ## Run
 
@@ -12,7 +14,7 @@ pip install fastapi uvicorn livekit-api python-dotenv   # already present if you
 python token_server.py
 ```
 
-Open http://localhost:8080 , allow the microphone, click **Connect & speak**.
+Open http://localhost:8080 , click **Start talking**, and allow the microphone.
 
 ## How it fits your infra
 
