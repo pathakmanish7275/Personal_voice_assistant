@@ -7,6 +7,8 @@ HttpSession::release_slot() guarded by an atomic flag, so each session frees
 its slot exactly once however it ends.
 
 Source: https://github.com/noamsto/nix-amd-ai/blob/35a61ad06930603957f9c51ec7bea68f0cc97a5f/pkgs/fastflowlm/patches/connection-slot-release.patch
+Copyright (c) 2026 Noam Stolero. Licensed under the MIT License (see the LICENSE
+file in https://github.com/noamsto/nix-amd-ai); redistributed here unmodified.
 Applies to v1.0.10 with line offsets; verified here 2026-10-24 (8 mid-stream
 drops with -s 4: 0 refused connections, cancel -> NPU free < 0.3 ms).
 
