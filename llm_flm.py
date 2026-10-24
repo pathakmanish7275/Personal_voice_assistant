@@ -16,10 +16,16 @@ module relies on were established in ~/Desktop/Personal-Database
 * Two requests must never be in flight on the NPU at once (FLM's own queue is
   where its crashes cluster). LiveKit runs every call in its own process, so the
   guard is a cross-process flock, not an asyncio lock.
-* Dropping an open stream mid-generation is what crashed FLM. A voice agent
-  does that on every barge-in, so the HTTP stream runs in a detached task that
-  always reads to the end (holding the NPU lock) even after LiveKit cancels the
-  turn; the turn itself just stops listening.
+* A voice agent abandons answers all the time (barge-in). What to do with the
+  open stream depends on the installed FLM (measured on v1.0.10):
+  - Dropping the connection makes FLM cancel the generation and free the NPU
+    in < 0.3 ms — but stock `flm serve` leaks a connection slot per drop
+    (ROCm/FastFlowLM#680; `/api/cancel` is no alternative, it cancels itself).
+    At the -s limit FLM refuses every connection until restarted.
+  - So by default the stream runs in a detached task that reads to the end
+    (holding the NPU lock) after LiveKit cancels the turn.
+  - With the patched package from tools/flm-slotfix (`+slotfix` version),
+    `abort_on_cancel` drops the stream instead and the NPU is free at once.
 
 Fallback: if the NPU is busy for longer than `lock_wait`, FLM is unreachable or
 errors, or produces nothing before `first_token_timeout`, the turn is served by
@@ -130,8 +136,12 @@ class FlmLLM(llm.LLM):
         first_token_timeout: float = 20.0,
         lock_path: Path = DEFAULT_LOCK_PATH,
         on_backend: Callable[[str], None] | None = None,
+        abort_on_cancel: bool = False,
     ) -> None:
         super().__init__()
+        self._abort_on_cancel = abort_on_cancel
+        logger.info("FLM %s @ %s; abandoned streams are %s", model, base_url,
+                    "dropped (slotfix FLM)" if abort_on_cancel else "drained")
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._fallback = fallback
@@ -229,15 +239,23 @@ class _FlmStream(llm.LLMStream):
         if not await lock.acquire(self._flm._lock_wait):
             raise _FlmUnavailable(f"NPU busy for more than {self._flm._lock_wait:.0f}s")
 
-        # The pump owns the lock from here and releases it only once FLM has
-        # finished the response — even if this turn is cancelled first.
+        # The pump owns the lock from here and releases it once the stream is
+        # closed: after FLM finishes (drain), or at once when an abandoned
+        # stream is dropped (abort_on_cancel).
         q: asyncio.Queue = asyncio.Queue()
         pump = asyncio.create_task(self._pump(payload, q, lock))
         _draining.add(pump)
         pump.add_done_callback(_draining.discard)
+        try:
+            await self._consume(q, t0=time.monotonic())
+        except (asyncio.CancelledError, _FlmUnavailable):
+            # The turn was abandoned (barge-in, or we gave up waiting).
+            if self._flm._abort_on_cancel and not pump.done():
+                pump.cancel()  # drops the connection; FLM frees the NPU at once
+            raise
 
+    async def _consume(self, q: asyncio.Queue, *, t0: float) -> None:
         req_id = str(uuid.uuid4())
-        t0 = time.monotonic()
         produced = False
         calls: dict[int, dict] = {}
         finish = None
@@ -312,8 +330,9 @@ class _FlmStream(llm.LLMStream):
     async def _pump(self, payload: dict, q: asyncio.Queue, lock: _NpuLock) -> None:
         """Read FLM's SSE stream to the very end, forwarding choices to `q`.
 
-        Never cancelled by the turn: if nobody is listening any more, the
-        remaining chunks are simply discarded once the queue is collected.
+        Not tied to the turn: if nobody is listening any more, the remaining
+        chunks are simply discarded once the queue is collected. Only cancelled
+        explicitly, in abort_on_cancel mode, which closes the connection.
         """
         try:
             async with self._flm._http.stream(

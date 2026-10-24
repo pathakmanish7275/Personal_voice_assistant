@@ -35,3 +35,6 @@ Thumbs.db
 
 # Local tooling
 .claude/settings.local.json
+
+# FLM slotfix packages (rebuilt by tools/flm-slotfix/build-deb.sh)
+tools/flm-slotfix/dist/

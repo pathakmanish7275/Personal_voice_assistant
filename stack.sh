@@ -127,6 +127,26 @@ PY="$(command -v python)"
 "$PY" -c "import fastapi, uvicorn, livekit.api" 2>/dev/null \
     || die "venv missing fastapi/uvicorn/livekit-api. Run: pip install fastapi uvicorn livekit-api"
 
+# Semantic end-of-turn model: the agent only loads it from the local cache, so
+# fetch it once (~500MB) if it's missing. Importing the plugin registers BOTH
+# the English and multilingual runners, so every revision must be cached or the
+# missing one fails at worker start. Without the plugin the agent falls back to
+# pause-only endpointing.
+if "$PY" -c "import livekit.plugins.turn_detector" 2>/dev/null \
+   && ! "$PY" -c "
+import os, sys
+from livekit.plugins.turn_detector.models import MODEL_REVISIONS
+refs = os.path.join(os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface')),
+                    'hub', 'models--livekit--turn-detector', 'refs')
+sys.exit(0 if all(os.path.exists(os.path.join(refs, r)) for r in MODEL_REVISIONS.values()) else 1)
+" 2>/dev/null; then
+    info "Downloading the end-of-turn model (one time)..."
+    mkdir -p logs
+    "$PY" agent.py download-files >logs/download-files.log 2>&1 \
+        && ok "End-of-turn model downloaded" \
+        || warn "End-of-turn model download failed (see logs/download-files.log)"
+fi
+
 # ── local server binary ──────────────────────────────────────────────────────
 SERVER_BIN="$SCRIPT_DIR/livekit-server/bin/livekit-server"
 [ -x "$SERVER_BIN" ] || die "LiveKit server binary not found/executable at $SERVER_BIN"
@@ -171,6 +191,12 @@ if [ "$LLM_PROVIDER" = "flm" ]; then
             warn "FLM didn't come up (see: journalctl --user -u flm-npu) — using the Ollama fallback."
         fi
     fi
+    FLM_PKG="$(dpkg-query -W -f='${Version}' fastflowlm 2>/dev/null || true)"
+    case "$FLM_PKG" in
+        *slotfix*) ok "FLM package ${FLM_PKG}: interrupted answers are dropped (NPU freed at once)" ;;
+        "")        ;;
+        *)         info "FLM package ${FLM_PKG} (stock): interrupted answers are drained, not dropped — see tools/flm-slotfix" ;;
+    esac
 fi
 
 # ── process tracking ──────────────────────────────────────────────────────────
