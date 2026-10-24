@@ -1,0 +1,22 @@
+# Self-hosted LiveKit server config for this voice-assistant stack.
+# Single node, no redis: agent dispatch + webhooks work in-memory for one
+# server. (Redis is only needed to run multiple LiveKit nodes.)
+port: 7880
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  # Same-machine browser reaches media over localhost. For other LAN devices,
+  # launch the server with --node-ip <this host's LAN IP> (stack.sh LIVEKIT_NODE_IP).
+  use_external_ip: false
+
+# No credentials in this file. stack.sh passes the key/secret from stack.env
+# via the LIVEKIT_KEYS env var, and renders livekit.runtime.yaml = this file +
+# a webhook section (api_key + dispatcher URL) so the webhook key always
+# matches. To run the server by hand instead:
+#   LIVEKIT_KEYS="<key>: <secret>" bin/livekit-server --config livekit.yaml
+# (plus a webhook: section if you want the dispatcher to receive events).
+
+logging:
+  level: info

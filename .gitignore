@@ -9,6 +9,9 @@ __pycache__/
 .env
 *.bak
 .env.legacy.bak
+stack.env
+# Rendered by stack.sh at launch (base livekit.yaml + webhook section)
+livekit-server/livekit.runtime.yaml
 
 # Runtime
 logs/
@@ -21,6 +24,10 @@ caddy_config/
 # Stray model artifacts (should be baked into the image, not committed)
 *.onnx
 *.bin
+
+# Vendored LiveKit server binaries (~66MB each) — keep on disk, don't commit.
+# Remove this line if you want the prebuilt binary committed with the repo.
+livekit-server/bin/
 
 # OS
 .DS_Store

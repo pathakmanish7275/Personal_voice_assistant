@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Personal Voice Assistant</title>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0b0d12; color: #e6e9ef; display: flex; min-height: 100vh;
+      align-items: center; justify-content: center; padding: 24px;
+    }
+    .card {
+      width: 100%; max-width: 480px; background: #151922; border: 1px solid #232a36;
+      border-radius: 16px; padding: 28px; box-shadow: 0 12px 40px rgba(0,0,0,.4);
+    }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: #8b94a7; font-size: 13px; margin-bottom: 20px; }
+    label { display: block; font-size: 12px; color: #8b94a7; margin: 12px 0 4px; }
+    input, select {
+      width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3342;
+      background: #0e1219; color: #e6e9ef; font-size: 14px;
+    }
+    button {
+      width: 100%; margin-top: 20px; padding: 12px; border: none; border-radius: 10px;
+      font-size: 15px; font-weight: 600; cursor: pointer; transition: .15s;
+    }
+    .connect { background: #4f7cff; color: #fff; }
+    .connect:hover { background: #3d6bf0; }
+    .disconnect { background: #2a3342; color: #ff8b8b; }
+    .status {
+      margin-top: 18px; padding: 10px 12px; border-radius: 8px; font-size: 13px;
+      background: #0e1219; border: 1px solid #232a36; display: flex; gap: 8px; align-items: center;
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #6b7280; flex: none; }
+    .dot.live { background: #34d399; box-shadow: 0 0 8px #34d399; }
+    .dot.connecting { background: #fbbf24; animation: pulse 1s infinite; }
+    .dot.error { background: #ef4444; }
+    @keyframes pulse { 50% { opacity: .3; } }
+    #orbWrap {
+      margin-top: 20px; display: flex; flex-direction: column; align-items: center; gap: 6px;
+    }
+    #orb { width: 220px; height: 220px; }
+    #orbLabel { font-size: 12px; color: #8b94a7; letter-spacing: .04em; text-transform: uppercase; }
+    #transcript {
+      margin-top: 16px; max-height: 220px; overflow-y: auto; font-size: 14px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .msg { padding: 8px 12px; border-radius: 10px; max-width: 85%; line-height: 1.4; }
+    .msg.user { background: #243049; align-self: flex-end; }
+    .msg.bot  { background: #1d2430; align-self: flex-start; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎙️ Personal Voice Assistant</h1>
+    <div class="sub">Connect and talk to <b>voice-agent</b></div>
+
+    <div id="form">
+      <label for="name">Name</label>
+      <input id="name" placeholder="e.g. Manish" />
+
+      <label for="mobile">Mobile number</label>
+      <input id="mobile" placeholder="e.g. 9665XXXXXXXX" />
+
+      <label for="language">Language</label>
+      <select id="language">
+        <option value="English">English</option>
+        <option value="Arabic">Arabic</option>
+      </select>
+
+      <label for="identity">Participant identity (optional)</label>
+      <input id="identity" placeholder="auto: web-xxxxxx" />
+
+      <label for="room">Room (optional — leave blank for a new one)</label>
+      <input id="room" placeholder="auto-generated ws- room" />
+
+      <button class="connect" id="connectBtn">Connect &amp; speak</button>
+    </div>
+
+    <button class="disconnect hidden" id="disconnectBtn">Disconnect</button>
+
+    <div id="orbWrap" class="hidden">
+      <canvas id="orb" width="440" height="440"></canvas>
+      <div id="orbLabel">idle</div>
+    </div>
+
+    <div class="status">
+      <span class="dot" id="dot"></span>
+      <span id="statusText">Idle</span>
+    </div>
+
+    <div id="transcript"></div>
+  </div>
+
+  <script>
+    const { Room, RoomEvent, Track, createAudioAnalyser } = LivekitClient;
+    const TOKEN_ENDPOINT = "/token";
+
+    const $ = (id) => document.getElementById(id);
+    const dot = $("dot"), statusText = $("statusText"), transcript = $("transcript");
+    let room = null;
+
+    /* ---------- Voice orb ---------- */
+    let agentAnalyser = null;   // { calculateVolume, cleanup } for the agent's audio
+    let localAnalyser = null;   // ...for the user's mic
+    let rafId = null;
+    const rings = [];           // expanding/contracting pulse rings
+    let lastSpawn = 0;
+    // smoothed levels + smoothed "mode strength" (-1 listening .. +1 speaking)
+    let agentLvl = 0, userLvl = 0, dir = 0, corePulse = 0;
+
+    function startOrb() {
+      $("orbWrap").classList.remove("hidden");
+      const canvas = $("orb");
+      const ctx = canvas.getContext("2d");
+      const W = canvas.width, H = canvas.height, cx = W / 2, cy = H / 2;
+      const coreR = 46, maxR = 180;
+
+      function loop(t) {
+        rafId = requestAnimationFrame(loop);
+
+        // Read raw levels (0..~1), smooth them.
+        const a = agentAnalyser ? agentAnalyser.calculateVolume() : 0;
+        const u = localAnalyser ? localAnalyser.calculateVolume() : 0;
+        agentLvl += (a - agentLvl) * 0.25;
+        userLvl  += (u - userLvl) * 0.25;
+
+        // Decide mode: agent speaking wins, else listening if user audible, else idle.
+        const speaking = agentLvl > 0.012 && agentLvl >= userLvl;
+        const listening = !speaking && userLvl > 0.02;
+        const target = speaking ? 1 : (listening ? -1 : 0);
+        dir += (target - dir) * 0.12;
+
+        const lvl = speaking ? agentLvl : listening ? userLvl : 0;
+        corePulse += (lvl - corePulse) * 0.2;
+
+        // Colors per mode (speaking = cool blue, listening = warm teal/amber).
+        const speakC = [99, 140, 255];
+        const listenC = [52, 211, 170];
+        const idleC = [120, 130, 150];
+        const mix = (dir + 1) / 2; // 0 listen .. 1 speak
+        let col;
+        if (Math.abs(dir) < 0.05) col = idleC;
+        else col = listenC.map((v, i) => Math.round(v + (speakC[i] - v) * mix));
+        const rgb = `${col[0]},${col[1]},${col[2]}`;
+
+        // Spawn pulse rings, faster/brighter with more volume.
+        const interval = 520 - Math.min(380, lvl * 1400);
+        if ((speaking || listening) && t - lastSpawn > interval) {
+          lastSpawn = t;
+          rings.push({
+            // outward: start at core, grow out. inward: start outside, shrink in.
+            r: speaking ? coreR : maxR,
+            out: speaking,
+            life: 1,
+            strength: Math.min(1, 0.4 + lvl * 3),
+          });
+        }
+
+        ctx.clearRect(0, 0, W, H);
+
+        // Update + draw rings.
+        for (let i = rings.length - 1; i >= 0; i--) {
+          const ring = rings[i];
+          const speed = 1.6 + ring.strength * 2.2;
+          ring.r += ring.out ? speed : -speed;
+          ring.life -= 0.012;
+          const fadedOut = ring.out ? ring.r > maxR : ring.r < coreR;
+          if (ring.life <= 0 || fadedOut) { rings.splice(i, 1); continue; }
+          ctx.beginPath();
+          ctx.arc(cx, cy, ring.r, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(${rgb},${(ring.life * ring.strength * 0.5).toFixed(3)})`;
+          ctx.lineWidth = 2 + ring.strength * 2;
+          ctx.stroke();
+        }
+
+        // Core orb: gentle idle breathing + reactive bump.
+        const breathe = 1 + Math.sin(t / 900) * 0.04;
+        const r = coreR * breathe + corePulse * 70;
+        const grad = ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r);
+        grad.addColorStop(0, `rgba(${rgb},0.95)`);
+        grad.addColorStop(1, `rgba(${rgb},0.15)`);
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.shadowColor = `rgba(${rgb},0.6)`;
+        ctx.shadowBlur = 30 + corePulse * 120;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        $("orbLabel").textContent = speaking ? "agent speaking" : listening ? "listening" : "idle";
+      }
+      rafId = requestAnimationFrame(loop);
+    }
+
+    function stopOrb() {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = null;
+      rings.length = 0;
+      try { agentAnalyser && agentAnalyser.cleanup(); } catch {}
+      try { localAnalyser && localAnalyser.cleanup(); } catch {}
+      agentAnalyser = localAnalyser = null;
+      $("orbWrap").classList.add("hidden");
+    }
+
+    function setStatus(text, cls) {
+      statusText.textContent = text;
+      dot.className = "dot" + (cls ? " " + cls : "");
+    }
+
+    function addMsg(text, who) {
+      // Coalesce consecutive updates from the same speaker (streaming transcriptions)
+      const last = transcript.lastElementChild;
+      if (last && last.dataset.who === who && last.dataset.streaming === "1") {
+        last.textContent = text;
+      } else {
+        const el = document.createElement("div");
+        el.className = "msg " + who;
+        el.dataset.who = who;
+        el.dataset.streaming = "1";
+        el.textContent = text;
+        transcript.appendChild(el);
+      }
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    async function connect() {
+      try {
+        setStatus("Requesting token…", "connecting");
+        const qs = new URLSearchParams();
+        const fields = {
+          identity: $("identity").value.trim(),
+          room: $("room").value.trim(),
+          name: $("name").value.trim(),
+          mobile_number: $("mobile").value.trim(),
+          language: $("language").value,
+        };
+        for (const [k, v] of Object.entries(fields)) if (v) qs.set(k, v);
+
+        const res = await fetch(`${TOKEN_ENDPOINT}?${qs}`);
+        if (!res.ok) throw new Error("token server error " + res.status);
+        const { token, url, room: joinedRoom } = await res.json();
+
+        setStatus("Connecting to " + joinedRoom + "…", "connecting");
+        room = new Room({ adaptiveStream: true, dynacast: true });
+
+        // Play agent audio + drive the "speaking" (outward) pulse from it
+        room.on(RoomEvent.TrackSubscribed, (track) => {
+          if (track.kind === Track.Kind.Audio) {
+            const el = track.attach();
+            el.autoplay = true;
+            document.body.appendChild(el);
+            try { agentAnalyser = createAudioAnalyser(track, { smoothingTimeConstant: 0.6 }); } catch (e) { console.warn(e); }
+          }
+        });
+
+        room.on(RoomEvent.TrackUnsubscribed, (track) => {
+          if (track.kind === Track.Kind.Audio && agentAnalyser) {
+            try { agentAnalyser.cleanup(); } catch {}
+            agentAnalyser = null;
+          }
+        });
+
+        // Live transcriptions (agent STT + bot replies)
+        room.on(RoomEvent.TranscriptionReceived, (segments, participant) => {
+          const isLocal = participant && participant.identity === room.localParticipant.identity;
+          const text = segments.map((s) => s.text).join(" ");
+          if (text.trim()) addMsg(text, isLocal ? "user" : "bot");
+          // mark final segments so the next one starts a new bubble
+          if (segments.every((s) => s.final)) {
+            const last = transcript.lastElementChild;
+            if (last) last.dataset.streaming = "0";
+          }
+        });
+
+        room.on(RoomEvent.Disconnected, () => {
+          stopOrb();
+          setStatus("Disconnected", "");
+          $("form").classList.remove("hidden");
+          $("disconnectBtn").classList.add("hidden");
+        });
+
+        await room.connect(url, token);
+        await room.localParticipant.setMicrophoneEnabled(true);
+
+        // Drive the "listening" (inward) pulse from the local mic
+        const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+        if (micPub && micPub.track) {
+          try { localAnalyser = createAudioAnalyser(micPub.track, { smoothingTimeConstant: 0.6 }); } catch (e) { console.warn(e); }
+        }
+
+        startOrb();
+        setStatus("Live in " + joinedRoom + " — start talking", "live");
+        $("form").classList.add("hidden");
+        $("disconnectBtn").classList.remove("hidden");
+      } catch (err) {
+        console.error(err);
+        setStatus("Error: " + err.message, "error");
+      }
+    }
+
+    async function disconnect() {
+      if (room) await room.disconnect();
+    }
+
+    $("connectBtn").onclick = connect;
+    $("disconnectBtn").onclick = disconnect;
+  </script>
+</body>
+</html>

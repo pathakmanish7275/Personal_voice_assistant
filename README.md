@@ -108,6 +108,50 @@ self-signed certificate warning once, pick a room, and click **Connect & talk**.
 > (internal CA) certificate, so each device shows a one-time "not private" warning
 > you can safely accept on your own LAN. Media itself (WebRTC) is always encrypted.
 
+### 4. Self-hosted LiveKit **binary** stack (no Docker image, webhook dispatch)
+Runs the actual LiveKit components vendored under `livekit-*/` — the server runs
+from the **prebuilt binary** (not the `livekit/livekit-server` Docker image or
+LiveKit Cloud), and a **webhook dispatcher** auto-dispatches the agent instead of
+the token embedding the dispatch. One script brings the whole thing up:
+
+```bash
+ollama serve                 # native, in another terminal; pull your model once
+./stack.sh                   # server + dispatcher + web + agent (Ctrl-C stops all)
+./stack.sh --monitor         # same, plus the live resource monitor
+./stack.sh --node-ip 192.168.1.9   # advertise a LAN IP so other devices can join
+./stack.sh --down            # stop anything the script left running
+```
+
+Then open **`http://localhost:8080`** (or `http://<node-ip>:8080`) and click
+**Connect & speak**. Flow:
+
+```
+ Browser ── :8080 web/token_server ──► mints a ws-* room token (url = local server)
+        └─► joins livekit-server (local binary, :7880)
+                 │ participant_joined webhook
+                 ▼
+            dispatcher (:3001)  ──► CreateAgentDispatch(agent_name="voice-agent")
+                 ▼
+            agent.py (dev worker) ──► Ollama + Whisper + Kokoro
+```
+
+**Credentials** live in `stack.env` (gitignored; template: `stack.env.example`).
+The first `./stack.sh` run generates it with a fresh random key/secret. No
+committed file holds a secret: the server gets it via the `LIVEKIT_KEYS` env var,
+and `stack.sh` renders `livekit-server/livekit.runtime.yaml` (base config + webhook
+section) at launch. To run the dispatcher or web server standalone, copy their
+`.env.example` to `.env`.
+
+`stack.sh` exports the local key/URL at launch, so they **override** each
+component's `.env` and the repo-root `.env` (which may point at LiveKit Cloud) —
+nothing is edited, the stack just runs fully local for its lifetime. The server
+runs single-node (no Redis). Recording/egress stays off unless you set the
+`EGRESS_*` vars the dispatcher reads.
+
+> Note: this is a different design from option 3. Option 3 uses the LiveKit
+> *Docker image* + Caddy TLS + token-embedded dispatch; option 4 uses the local
+> *binary* + a webhook dispatcher. Don't run both on `:7880`/`:8080` at once.
+
 ## Configuration
 
 All config is via `.env` (see `.env.example` for the full list). Key variables:
@@ -135,6 +179,11 @@ token_server.py       Mints browser JWTs + dispatches the agent
 web/index.html        Browser client (livekit-client)
 experiment.sh         One-click: STT/TTS in Docker + native agent console
 start.sh              Native runner (console/dev/start)
+stack.sh              One-click self-hosted binary stack (option 4)
+livekit-server/       Vendored LiveKit server source + prebuilt binary (bin/)
+livekit-dispatcher/   Webhook dispatcher — CreateAgentDispatch on participant_joined
+livekit-web/          Standalone token server + browser client for the binary stack
+livekit-monitor/      psutil resource monitor for the running stack
 Dockerfile.agent      Agent/token image with models baked in
 Dockerfile.services   STT/TTS server image with models baked in
 docker-compose.yml    Full LAN stack: LiveKit + Redis + agent + token + Caddy
