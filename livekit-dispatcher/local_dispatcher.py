@@ -33,6 +33,13 @@ logger = logging.getLogger("dispatcher")
 # override via DISPATCH_AGENT_NAME if you rename it.
 DISPATCH_AGENT_NAME = os.getenv("DISPATCH_AGENT_NAME", "voice-agent")
 
+# LiveKit signs every webhook: the Authorization header is a JWT (made with our
+# API key/secret) that carries the body's sha256. Verifying it means only our own
+# server can trigger agent dispatches and room teardowns.
+_webhook_receiver = lk_api.WebhookReceiver(
+    lk_api.TokenVerifier(os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET"))
+)
+
 app = FastAPI()
 
 # keep track of rooms we've already dispatched (now keyed by room only)
@@ -275,9 +282,16 @@ async def _maybe_start_room_egress(lk: lk_api.LiveKitAPI, room: str):
 
 @app.post("/webhook")
 async def on_event(req: Request):
+    raw = (await req.body()).decode("utf-8", errors="replace")
+    try:
+        _webhook_receiver.receive(raw, req.headers.get("Authorization", ""))
+    except Exception:
+        logger.warning("Rejected webhook with a missing or invalid signature")
+        raise HTTPException(401, "Invalid webhook signature")
+
     # log raw payload for debug purposes
     try:
-        body = await req.json()
+        body = json.loads(raw)
     except Exception as e:
         logger.exception("Failed to parse JSON payload: %s", e)
         raise HTTPException(400, "Invalid JSON payload")
@@ -425,4 +439,6 @@ async def on_event(req: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "3001")), log_level="debug")
+    # Only the local LiveKit server posts here, so listen on localhost by default.
+    uvicorn.run(app, host=os.getenv("DISPATCHER_HOST", "127.0.0.1"),
+                port=int(os.getenv("PORT", "3001")), log_level="debug")

@@ -408,6 +408,7 @@ keeps its LiveKit credentials in `stack.env` and exports its own values over
 | `LIVEKIT_NODE_IP` | – | Host LAN IP advertised for WebRTC media (option 3) |
 | `DISPATCH_AGENT_NAME` / `LIVEKIT_AGENT_NAME` | `voice-agent` | Agent to dispatch (option 4 dispatcher / option 3 token server) |
 | `PORT` | `3001` | Dispatcher port (LiveKit posts webhooks here) |
+| `DISPATCHER_HOST` | `127.0.0.1` | Dispatcher listen address (only the local LiveKit server needs it) |
 | `WEB_PORT` / `TOKEN_PORT` | `8080` | Web client + token server (option 4) / token server (option 3) |
 | `LOG_LEVEL` | `DEBUG` | Dispatcher log level |
 | `EGRESS_*` | unset | Dispatcher recording (`EGRESS_AZURE_*`, `EGRESS_FILEPATH`, `EGRESS_LOCAL_DIR`); off unless set |
@@ -425,11 +426,15 @@ keeps its LiveKit credentials in `stack.env` and exports its own values over
 - **Conversation text is stored locally** in two places: transcripts in
   `logs/agent.log` (gitignored), and FastFlowLM's replies in the systemd journal
   (`journalctl --user -u flm-npu`).
-- **LAN exposure (option 4).** The web/token server (`:8080`), dispatcher (`:3001`)
-  and LiveKit (`:7880`, `:7881`) listen on all interfaces. The token server has no
-  authentication — anyone who can reach it can start a call — and the dispatcher
-  doesn't verify webhook signatures. Use it on a trusted network, or firewall
-  those ports. FLM and Ollama listen on localhost only.
+- **Webhooks are verified.** The dispatcher listens on localhost only
+  (`DISPATCHER_HOST`, default `127.0.0.1`) and rejects any webhook without a valid
+  LiveKit signature (HTTP 401), so nothing else can trigger agent dispatches or
+  room teardowns.
+- **LAN exposure (option 4).** The web/token server (`:8080`) and LiveKit
+  (`:7880`, `:7881`) listen on all interfaces, and the token server has no
+  authentication — anyone who can reach it can start a call. Use it on a trusted
+  network, or firewall `:8080`. FLM, Ollama and the dispatcher listen on
+  localhost only.
 
 ## Operating the stack
 
