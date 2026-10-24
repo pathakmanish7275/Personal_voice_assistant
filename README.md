@@ -6,7 +6,7 @@ and text-to-speech all run on your own machine.
 | Stage | Engine | Notes |
 |-------|--------|-------|
 | STT   | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) | in-process, `base` model |
-| LLM   | [Ollama](https://ollama.com) · `qwen3.5:4b` | native, GPU; thinking disabled via `/api/chat` → ~1s replies |
+| LLM   | [FastFlowLM](https://github.com/FastFlowLM/FastFlowLM) · `qwen3.5:4b` on the AMD NPU, [Ollama](https://ollama.com) fallback | FLM via `/v1/chat/completions` (~2.5s first token); Ollama `/api/chat`, think off, when the NPU is busy/down |
 | TTS   | [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) | in-process, ONNX |
 | VAD   | Silero (bundled in `livekit-plugins-silero`) | |
 | Orchestration | [LiveKit Agents](https://github.com/livekit/agents) 1.5 | console **or** room mode |
@@ -19,7 +19,7 @@ cloud plugins. Each is chosen by env var; the default is fully local/in-process:
 | Stage | `*_PROVIDER=local`/`ollama` (default) | `*_PROVIDER=openai` |
 |-------|----------------------------------------|----------------------|
 | STT   | in-process faster-whisper              | `openai.STT(base_url=…)` → local Docker server **or** OpenAI cloud |
-| LLM   | Ollama (`/api/chat`, think off)        | `openai.LLM(base_url=…)` → any OpenAI-compatible LLM |
+| LLM   | FLM (NPU) → Ollama fallback (`LLM_PROVIDER=flm`, default) · Ollama only (`ollama`) | `openai.LLM(base_url=…)` → any OpenAI-compatible LLM |
 | TTS   | in-process Kokoro                      | `openai.TTS(base_url=…)` → local Docker server **or** OpenAI cloud |
 
 Because the local Docker STT/TTS servers speak the OpenAI audio API, switching
@@ -169,6 +169,7 @@ All config is via `.env` (see `.env.example` for the full list). Key variables:
 ```
 agent.py              LiveKit entrypoint (console + room mode)
 session.py            Provider factory + pipeline wiring (VAD/STT/LLM/TTS)
+llm_flm.py            FLM (NPU) LLM: /v1 + tools, cross-process NPU lock, drain-on-interrupt, Ollama fallback
 llm_ollama.py         Custom Ollama LLM via /api/chat (think:false → fast)
 stt_whisper.py        In-process faster-whisper STT plugin (provider: local)
 tts_kokoro.py         In-process Kokoro TTS plugin (provider: local)

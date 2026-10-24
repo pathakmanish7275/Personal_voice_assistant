@@ -16,9 +16,11 @@ Text-to-Speech**. The stages are:
 - **Speech-to-Text (STT):** OpenAI's **Whisper** model, running locally via
   **faster-whisper** (the CTranslate2 build, `base` model, int8 on CPU). It turns
   the user's speech into text on-device.
-- **Language Model (LLM):** **Qwen 3.5 4B**, served locally by **Ollama**. It is
-  called through Ollama's native `/api/chat` endpoint with "thinking" mode turned
-  off, which keeps replies fast — typically around a second.
+- **Language Model (LLM):** **Qwen 3.5 4B**, running on the laptop's AMD **NPU**
+  (neural processing unit) through **FastFlowLM**, with "thinking" mode turned
+  off. The first words of a reply typically arrive in two to four seconds. If the
+  NPU is busy or unavailable, **Ollama** serves the same model on the CPU as an
+  automatic fallback, which is slower.
 - **Text-to-Speech (TTS):** **Kokoro**, a local ONNX neural voice model
   (24 kHz audio, default voice "af heart"). It speaks the responses aloud.
 

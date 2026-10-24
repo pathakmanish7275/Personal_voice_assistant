@@ -17,7 +17,7 @@ logger = logging.getLogger("session")
 # local and in-process.
 
 STT_PROVIDER = os.getenv("STT_PROVIDER", "local").lower()   # local | openai
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()  # ollama | openai
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "flm").lower()     # flm | ollama | openai
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "local").lower()   # local | openai
 
 # STT
@@ -26,7 +26,12 @@ STT_BASE_URL = os.getenv("STT_BASE_URL", "http://localhost:8001/v1")
 STT_MODEL = os.getenv("STT_MODEL", "whisper")  # any non-"whisper-1" => json response
 STT_API_KEY = os.getenv("STT_API_KEY", "local")
 
-# LLM
+# LLM — "flm" serves from the NPU via FastFlowLM and falls back to Ollama
+# (busy NPU / FLM down / error), so it's safe as the default even without FLM.
+FLM_BASE_URL = os.getenv("FLM_BASE_URL", "http://localhost:52625")
+FLM_MODEL = os.getenv("FLM_MODEL", "qwen3.5:4b")
+FLM_MAX_TOKENS = int(os.getenv("FLM_MAX_TOKENS", "400"))
+FLM_LOCK_WAIT = float(os.getenv("FLM_LOCK_WAIT", "4"))  # s to wait for a busy NPU before falling back
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
@@ -59,8 +64,22 @@ def build_stt(lang_code: str):
     raise ValueError(f"unknown STT_PROVIDER: {STT_PROVIDER!r}")
 
 
-def build_llm():
-    """LLM provider: local Ollama (think disabled), or any OpenAI-compatible endpoint."""
+def build_llm(on_backend=None):
+    """LLM provider: FLM on the NPU with Ollama fallback, local Ollama (think
+    disabled), or any OpenAI-compatible endpoint. `on_backend(label)` is told
+    which backend served each turn (FLM only)."""
+    if LLM_PROVIDER == "flm":
+        from llm_flm import FlmLLM
+        from llm_ollama import OllamaLLM
+
+        return FlmLLM(
+            model=FLM_MODEL,
+            base_url=FLM_BASE_URL,
+            fallback=OllamaLLM(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, think=False),
+            max_tokens=FLM_MAX_TOKENS,
+            lock_wait=FLM_LOCK_WAIT,
+            on_backend=on_backend,
+        )
     if LLM_PROVIDER == "ollama":
         from llm_ollama import OllamaLLM
 
@@ -101,12 +120,30 @@ async def create_session(
     session = AgentSession(
         vad=silero.VAD.load(),
         stt=build_stt(lang_code),
-        llm=build_llm(),
+        llm=build_llm(on_backend=_backend_publisher(ctx)),
         tts=build_tts(),
         userdata={},
     )
 
     return session, None
+
+
+def _backend_publisher(ctx: JobContext):
+    """Publish the serving LLM backend as the agent's `pva.llm` participant
+    attribute (shown as a pill in the web UI). Only sends on change."""
+    last = None
+
+    def publish(label: str) -> None:
+        nonlocal last
+        if label == last:
+            return
+        last = label
+        logger.info("llm backend: %s", label)
+        if ctx.is_fake_job():
+            return
+        asyncio.ensure_future(ctx.room.local_participant.set_attributes({"pva.llm": label}))
+
+    return publish
 
 
 def register_event_handlers(

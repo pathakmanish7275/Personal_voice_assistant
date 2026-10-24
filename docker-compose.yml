@@ -39,6 +39,9 @@ services:
       # In-container, Ollama (native on host) is reached via host.docker.internal,
       # overriding the localhost value .env uses for the native agent.
       OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # FLM (NPU) on the host; if it isn't reachable from the container the
+      # agent falls back to Ollama on every turn, which is harmless.
+      FLM_BASE_URL: http://host.docker.internal:52625
       OLLAMA_MODEL: ${OLLAMA_MODEL}
       WHISPER_MODEL: ${WHISPER_MODEL}
       TTS_VOICE: ${TTS_VOICE}

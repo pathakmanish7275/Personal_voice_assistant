@@ -113,8 +113,10 @@ export WEB_PORT="${WEB_PORT:-8080}"   # web token server / client port
 # Agent providers: everything in-process/local (no STT/TTS containers needed).
 export STT_PROVIDER="${STT_PROVIDER:-local}"
 export TTS_PROVIDER="${TTS_PROVIDER:-local}"
-export LLM_PROVIDER="${LLM_PROVIDER:-ollama}"
+export LLM_PROVIDER="${LLM_PROVIDER:-flm}"     # FLM on the NPU, Ollama as fallback
 export OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
+export FLM_BASE_URL="${FLM_BASE_URL:-http://localhost:52625}"
+export FLM_MODEL="${FLM_MODEL:-qwen3.5:4b}"
 
 # ── venv ───────────────────────────────────────────────────────────────────
 [ -f ".venv/bin/activate" ] || die "No .venv found. Run ./start.sh --install first to create it."
@@ -132,10 +134,43 @@ ok "LiveKit server binary: $("$SERVER_BIN" --version 2>&1 | head -1)"
 
 # ── Ollama check (the agent's LLM) ────────────────────────────────────────────
 if ! curl -sf --max-time 2 "${OLLAMA_BASE_URL}/api/tags" >/dev/null 2>&1; then
-    warn "Ollama not reachable at ${OLLAMA_BASE_URL} — the agent will fail to answer."
+    if [ "$LLM_PROVIDER" = "flm" ]; then
+        warn "Ollama not reachable at ${OLLAMA_BASE_URL} — no fallback if FLM is busy or down."
+    else
+        warn "Ollama not reachable at ${OLLAMA_BASE_URL} — the agent will fail to answer."
+    fi
     warn "Start it with:  ollama serve   (and pull your model, e.g. ollama pull qwen3.5:4b)"
 else
     ok "Ollama → ${OLLAMA_BASE_URL}"
+fi
+
+# ── FLM on the NPU (primary LLM; Ollama is the fallback) ─────────────────────
+# Started as the supervised `flm-npu` user unit (same as Personal-Database), and
+# deliberately NOT stopped with the stack: it may be serving the Personal-Database
+# too, and FLM must never be killed mid-generation. Stop it yourself with
+#   systemctl --user stop flm-npu
+if [ "$LLM_PROVIDER" = "flm" ]; then
+    FLM_PORT="${FLM_BASE_URL##*:}"
+    if curl -sf --max-time 2 "${FLM_BASE_URL}/api/tags" >/dev/null 2>&1; then
+        ok "FLM → ${FLM_BASE_URL} (already running)"
+    elif ! command -v flm >/dev/null 2>&1; then
+        warn "FLM not installed — every turn will use the Ollama fallback."
+    else
+        info "Starting FLM (${FLM_MODEL}) on the NPU as user unit flm-npu..."
+        systemctl --user reset-failed flm-npu 2>/dev/null || true
+        if systemd-run --user --unit=flm-npu --property=LimitMEMLOCK=infinity \
+               flm serve "$FLM_MODEL" --port "$FLM_PORT" -q 1 -s 4 >/dev/null 2>&1; then
+            for _ in $(seq 1 30); do
+                curl -sf --max-time 2 "${FLM_BASE_URL}/api/tags" >/dev/null 2>&1 && break
+                sleep 1
+            done
+        fi
+        if curl -sf --max-time 2 "${FLM_BASE_URL}/api/tags" >/dev/null 2>&1; then
+            ok "FLM → ${FLM_BASE_URL} (started; model loads on first request)"
+        else
+            warn "FLM didn't come up (see: journalctl --user -u flm-npu) — using the Ollama fallback."
+        fi
+    fi
 fi
 
 # ── process tracking ──────────────────────────────────────────────────────────
