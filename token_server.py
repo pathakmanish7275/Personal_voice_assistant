@@ -25,7 +25,7 @@ from livekit.api import (
 API_KEY = os.environ["LIVEKIT_API_KEY"]
 API_SECRET = os.environ["LIVEKIT_API_SECRET"]
 # The URL the *browser* uses to reach LiveKit (through Caddy), not the in-compose URL.
-WS_PUBLIC = os.getenv("LIVEKIT_WS_PUBLIC", "wss://192.168.1.9")
+WS_PUBLIC = os.getenv("LIVEKIT_WS_PUBLIC", "wss://localhost")
 AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "voice-agent")
 PORT = int(os.getenv("TOKEN_PORT", "8080"))
 
