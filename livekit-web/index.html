@@ -2,314 +2,611 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Personal Voice Assistant</title>
-  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='11' fill='%230b0d12'/%3E%3Cpath d='M7 10v4M10 7v10M14 8v8M17 10v4' stroke='%231fd5f9' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <!-- livekit-client 2.16.1, vendored (served by token_server.py) so the page
+       works offline. Pinned below 2.17: from 2.17 the client first probes the
+       /rtc/v1 signal path, which livekit-server 1.9.9 doesn't serve (404 +
+       retry on every connect). -->
+  <script src="/static/livekit-client.umd.min.js"></script>
   <style>
-    :root { color-scheme: dark; }
+    /* Design notes: one hero visual that carries the agent's state (cf. the
+       ChatGPT voice orb / LiveKit "Aura"), big controls in a bottom dock
+       (cf. Gemini Live, LiveKit control bar), transcript as an optional panel
+       with live captions when it's closed. */
+    :root {
+      --bg: #f5f6f8; --bg-2: #eceef2; --surface: #ffffff; --border: #dfe3ea;
+      --text: #12151b; --muted: #5b6474; --faint: #8b93a2;
+      --accent: #0f7ae5; --on-accent: #ffffff;
+      --danger: #e5484d; --danger-hover: #cf3a3f;
+      --user-bubble: #e6ecf5;
+      --ok: #12a179; --warn: #c98a07;
+      --shadow: 0 1px 2px rgba(16,24,40,.05), 0 10px 30px rgba(16,24,40,.10);
+      --aura-blend: multiply;
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #07080b; --bg-2: #0e1015; --surface: #15181f; --border: #262a33;
+        --text: #eef0f4; --muted: #9ba3b2; --faint: #687183;
+        --accent: #1fd5f9; --on-accent: #04141a;
+        --danger: #f2555a; --danger-hover: #dd4449;
+        --user-bubble: #1d212a;
+        --ok: #34d399; --warn: #fbbf24;
+        --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 40px rgba(0,0,0,.45);
+        --aura-blend: screen;
+        color-scheme: dark;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #07080b; --bg-2: #0e1015; --surface: #15181f; --border: #262a33;
+      --text: #eef0f4; --muted: #9ba3b2; --faint: #687183;
+      --accent: #1fd5f9; --on-accent: #04141a;
+      --danger: #f2555a; --danger-hover: #dd4449;
+      --user-bubble: #1d212a;
+      --ok: #34d399; --warn: #fbbf24;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 40px rgba(0,0,0,.45);
+      --aura-blend: screen;
+      color-scheme: dark;
+    }
+
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { height: 100%; }
     body {
-      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: #0b0d12; color: #e6e9ef; display: flex; min-height: 100vh;
-      align-items: center; justify-content: center; padding: 24px;
+      margin: 0; background: radial-gradient(120% 80% at 50% 0%, var(--bg-2), var(--bg) 70%) fixed;
+      color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
     }
-    .card {
-      width: 100%; max-width: 480px; background: #151922; border: 1px solid #232a36;
-      border-radius: 16px; padding: 28px; box-shadow: 0 12px 40px rgba(0,0,0,.4);
+    .shell {
+      height: 100dvh; max-width: 760px; margin: 0 auto; padding: 0 16px;
+      display: flex; flex-direction: column;
     }
-    h1 { font-size: 20px; margin: 0 0 4px; }
-    .sub { color: #8b94a7; font-size: 13px; margin-bottom: 20px; }
-    label { display: block; font-size: 12px; color: #8b94a7; margin: 12px 0 4px; }
+
+    /* ── top bar ────────────────────────────────────────────────────── */
+    .top { display: flex; align-items: center; gap: 10px; padding: 16px 0 8px; }
+    .brand { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-weight: 600; font-size: 14px; }
+    .brand svg { color: var(--accent); flex: none; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 999px;
+      background: var(--surface); border: 1px solid var(--border); font-size: 12px; color: var(--muted);
+      white-space: nowrap; font-variant-numeric: tabular-nums;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+    .dot.live { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+    .dot.connecting { background: var(--warn); animation: blink 1s infinite; }
+    .dot.error { background: var(--danger); }
+    @keyframes blink { 50% { opacity: .3; } }
+    .icon-btn {
+      width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface);
+      color: var(--muted); display: grid; place-items: center; cursor: pointer;
+    }
+    .icon-btn:hover { color: var(--text); }
+
+    /* ── stage ──────────────────────────────────────────────────────── */
+    .stage {
+      flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 6px; padding-bottom: 8px; transition: justify-content .3s;
+    }
+    .aura-wrap {
+      --size: min(62vw, 340px);
+      width: var(--size); height: var(--size); flex: none; position: relative;
+      transition: width .35s ease, height .35s ease;
+    }
+    #aura {
+      width: 100%; height: 100%; display: block;
+      filter: blur(calc(var(--size) * .055)) saturate(1.15);
+      mix-blend-mode: var(--aura-blend);
+    }
+    #stateLabel { font-size: 20px; font-weight: 600; letter-spacing: -.01em; min-height: 30px; text-align: center; }
+    #caption {
+      max-width: 560px; min-height: 48px; text-align: center; color: var(--muted); font-size: 16px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+      transition: opacity .2s;
+    }
+    #caption.user { color: var(--faint); font-style: italic; }
+
+    /* transcript open: aura shrinks to the top, transcript fills the rest */
+    .shell.idle #stateLabel, .shell.idle #caption { display: none; }
+    .shell.with-transcript .stage { justify-content: flex-start; }
+    .shell.with-transcript .aura-wrap { --size: 132px; }
+    .shell.with-transcript #caption { display: none; }
+    .shell.with-transcript #stateLabel { font-size: 15px; min-height: 24px; }
+
+    /* ── welcome ────────────────────────────────────────────────────── */
+    .welcome { width: 100%; max-width: 440px; text-align: center; margin-top: 8px; }
+    .welcome h1 { font-size: clamp(24px, 4.5vw, 30px); letter-spacing: -.02em; margin: 0 0 6px; }
+    .welcome p { color: var(--muted); margin: 0 0 22px; }
+    .start-row { display: flex; gap: 8px; }
+    @media (max-width: 460px) { .start-row { flex-direction: column; } }
     input, select {
-      width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #2a3342;
-      background: #0e1219; color: #e6e9ef; font-size: 14px;
+      width: 100%; padding: 12px 14px; border-radius: 999px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); font: inherit; font-size: 15px; min-width: 0;
     }
-    button {
-      width: 100%; margin-top: 20px; padding: 12px; border: none; border-radius: 10px;
-      font-size: 15px; font-weight: 600; cursor: pointer; transition: .15s;
+    select { border-radius: 12px; }
+    .opts input { border-radius: 12px; }
+    input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
     }
-    .connect { background: #4f7cff; color: #fff; }
-    .connect:hover { background: #3d6bf0; }
-    .disconnect { background: #2a3342; color: #ff8b8b; }
-    .status {
-      margin-top: 18px; padding: 10px 12px; border-radius: 8px; font-size: 13px;
-      background: #0e1219; border: 1px solid #232a36; display: flex; gap: 8px; align-items: center;
+    button { font: inherit; border: none; cursor: pointer; }
+    .start {
+      flex: none; padding: 12px 22px; border-radius: 999px; background: var(--text); color: var(--bg);
+      font-weight: 600; font-size: 15px; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      transition: transform .05s, opacity .15s;
     }
-    .dot { width: 9px; height: 9px; border-radius: 50%; background: #6b7280; flex: none; }
-    .dot.live { background: #34d399; box-shadow: 0 0 8px #34d399; }
-    .dot.connecting { background: #fbbf24; animation: pulse 1s infinite; }
-    .dot.error { background: #ef4444; }
-    @keyframes pulse { 50% { opacity: .3; } }
-    #orbWrap {
-      margin-top: 20px; display: flex; flex-direction: column; align-items: center; gap: 6px;
+    .start:hover:not(:disabled) { opacity: .88; }
+    .start:active { transform: scale(.98); }
+    .start:disabled { opacity: .55; cursor: default; }
+    details { margin-top: 14px; text-align: left; }
+    summary { cursor: pointer; font-size: 13px; color: var(--muted); text-align: center; list-style: none; }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: " ▾"; }
+    details[open] summary::after { content: " ▴"; }
+    .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+    @media (max-width: 460px) { .opts { grid-template-columns: 1fr; } }
+    .opts label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px 4px; }
+
+    /* ── transcript panel ───────────────────────────────────────────── */
+    .transcript {
+      width: 100%; flex: 1; min-height: 0; overflow-y: auto; padding: 24px 4px 12px;
+      display: flex; flex-direction: column; gap: 14px;
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 28px);
+              mask-image: linear-gradient(to bottom, transparent 0, #000 28px);
     }
-    #orb { width: 220px; height: 220px; }
-    #orbLabel { font-size: 12px; color: #8b94a7; letter-spacing: .04em; text-transform: uppercase; }
-    #transcript {
-      margin-top: 16px; max-height: 220px; overflow-y: auto; font-size: 14px;
-      display: flex; flex-direction: column; gap: 8px;
+    .empty { margin: auto; color: var(--faint); font-size: 14px; text-align: center; }
+    .msg { max-width: 82%; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+    .msg.user { align-self: flex-end; background: var(--user-bubble); padding: 9px 14px; border-radius: 18px 18px 6px 18px; }
+    .msg.bot { align-self: flex-start; font-size: 15.5px; }
+    .msg.interim { opacity: .6; }
+
+    /* ── dock ───────────────────────────────────────────────────────── */
+    .dock {
+      align-self: center; display: flex; align-items: center; gap: 10px; padding: 8px;
+      margin: 8px 0 calc(16px + env(safe-area-inset-bottom));
+      background: var(--surface); border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--shadow);
     }
-    .msg { padding: 8px 12px; border-radius: 10px; max-width: 85%; line-height: 1.4; }
-    .msg.user { background: #243049; align-self: flex-end; }
-    .msg.bot  { background: #1d2430; align-self: flex-start; }
-    .hidden { display: none; }
+    .dock button {
+      height: 52px; min-width: 52px; border-radius: 999px; display: inline-flex; align-items: center;
+      justify-content: center; gap: 8px; background: transparent; color: var(--text); padding: 0 14px;
+      transition: background .15s;
+    }
+    .dock button:hover { background: var(--bg-2); }
+    .dock button[aria-pressed="true"] { background: var(--bg-2); }
+    #muteBtn.off { background: var(--text); color: var(--bg); }
+    #endBtn { background: var(--danger); color: #fff; padding: 0 20px; font-weight: 600; }
+    #endBtn:hover { background: var(--danger-hover); }
+    /* mini level meter for your own mic, inside the mute button */
+    .meter { display: inline-flex; align-items: center; gap: 2px; height: 18px; }
+    .meter i { width: 3px; height: 4px; border-radius: 2px; background: currentColor; opacity: .85; transition: height .06s; }
+    #muteBtn.off .meter { display: none; }
+
+    /* ── banner ─────────────────────────────────────────────────────── */
+    .banner {
+      position: fixed; left: 50%; top: 64px; transform: translateX(-50%); width: min(560px, calc(100% - 32px));
+      z-index: 5; border-radius: 14px; padding: 12px 16px; font-size: 14px; box-shadow: var(--shadow);
+      background: var(--surface); border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+    }
+    .banner.info { border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); }
+    .banner button { margin-top: 8px; padding: 6px 14px; border-radius: 999px; background: var(--text); color: var(--bg); font-weight: 600; font-size: 13px; }
+    code { font-size: 12.5px; background: var(--bg-2); padding: 1px 6px; border-radius: 6px; }
+
+    @media (prefers-reduced-motion: reduce) { .aura-wrap { transition: none; } }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>🎙️ Personal Voice Assistant</h1>
-    <div class="sub">Connect and talk to <b>voice-agent</b></div>
+  <div class="shell idle" id="shell">
+    <header class="top">
+      <div class="brand">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>
+        <span>Personal Voice Assistant</span>
+      </div>
+      <span class="pill" id="llmPill" hidden></span>
+      <span class="pill"><span class="dot" id="dot"></span><span id="statusText">Local</span></span>
+      <button class="icon-btn" id="themeBtn" aria-label="Toggle light/dark theme" title="Toggle theme">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+    </header>
 
-    <div id="form">
-      <label for="name">Name</label>
-      <input id="name" placeholder="e.g. Manish" />
+    <div id="banner" class="banner" role="alert" hidden></div>
 
-      <label for="mobile">Mobile number</label>
-      <input id="mobile" placeholder="e.g. 9665XXXXXXXX" />
+    <main class="stage">
+      <div class="aura-wrap"><canvas id="aura" width="560" height="560" aria-hidden="true"></canvas></div>
+      <div id="stateLabel" aria-live="polite"></div>
+      <div id="caption"></div>
 
-      <label for="language">Language</label>
-      <select id="language">
-        <option value="English">English</option>
-        <option value="Arabic">Arabic</option>
-      </select>
+      <section class="welcome" id="welcome">
+        <h1>Talk to your assistant</h1>
+        <p>Speech, reasoning and voice all run on this machine.</p>
+        <div class="start-row">
+          <input id="name" placeholder="Your name (optional)" autocomplete="given-name" aria-label="Your name" />
+          <button class="start" id="connectBtn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg>
+            Start talking
+          </button>
+        </div>
+        <details>
+          <summary>More options</summary>
+          <div class="opts">
+            <div>
+              <label for="language">Language</label>
+              <select id="language"><option value="English">English</option><option value="Arabic">Arabic</option></select>
+            </div>
+            <div><label for="mobile">Mobile number</label><input id="mobile" placeholder="optional" inputmode="tel" /></div>
+            <div><label for="room">Room</label><input id="room" placeholder="new room each time" /></div>
+            <div><label for="identity">Participant identity</label><input id="identity" placeholder="auto: web-xxxxxx" /></div>
+          </div>
+        </details>
+      </section>
 
-      <label for="identity">Participant identity (optional)</label>
-      <input id="identity" placeholder="auto: web-xxxxxx" />
+      <section class="transcript" id="transcript" aria-live="polite" hidden>
+        <div class="empty" id="empty">Your conversation will appear here.</div>
+      </section>
+    </main>
 
-      <label for="room">Room (optional — leave blank for a new one)</label>
-      <input id="room" placeholder="auto-generated ws- room" />
-
-      <button class="connect" id="connectBtn">Connect &amp; speak</button>
-    </div>
-
-    <button class="disconnect hidden" id="disconnectBtn">Disconnect</button>
-
-    <div id="orbWrap" class="hidden">
-      <canvas id="orb" width="440" height="440"></canvas>
-      <div id="orbLabel">idle</div>
-    </div>
-
-    <div class="status">
-      <span class="dot" id="dot"></span>
-      <span id="statusText">Idle</span>
-    </div>
-
-    <div id="transcript"></div>
+    <nav class="dock" id="dock" aria-label="Call controls" hidden>
+      <button id="muteBtn" aria-label="Mute microphone (M)" title="Mute (M)">
+        <svg id="micOn" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg>
+        <svg id="micOff" hidden width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 9.3V5a3 3 0 0 0-5.7-1.3M9 9v3a3 3 0 0 0 5.1 2.1M19 10a7 7 0 0 1-1.2 3.9M5 10a7 7 0 0 0 11.3 5.5M12 17v5M3 3l18 18"/></svg>
+        <span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      </button>
+      <button id="chatBtn" aria-label="Show transcript (T)" aria-pressed="false" title="Transcript (T)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>
+      </button>
+      <span class="pill" id="timer" style="border:none;background:none">00:00</span>
+      <button id="endBtn" aria-label="End conversation">End</button>
+    </nav>
   </div>
 
   <script>
-    const { Room, RoomEvent, Track, createAudioAnalyser } = LivekitClient;
+    const { Room, RoomEvent, Track, ParticipantKind, createAudioAnalyser } = LivekitClient;
     const TOKEN_ENDPOINT = "/token";
-
+    const AGENT_JOIN_TIMEOUT_MS = 20000;
     const $ = (id) => document.getElementById(id);
-    const dot = $("dot"), statusText = $("statusText"), transcript = $("transcript");
+
     let room = null;
+    let agentJoined = false;
+    let agentState = null;           // lk.agent.state: initializing|listening|thinking|speaking
+    let connecting = false;
+    let agentTimer = null, clockTimer = null;
+    let transcriptOpen = false;
+    const segEls = new Map();        // transcription segment id → element
+    const audioEls = new Set();
 
-    /* ---------- Voice orb ---------- */
-    let agentAnalyser = null;   // { calculateVolume, cleanup } for the agent's audio
-    let localAnalyser = null;   // ...for the user's mic
-    let rafId = null;
-    const rings = [];           // expanding/contracting pulse rings
-    let lastSpawn = 0;
-    // smoothed levels + smoothed "mode strength" (-1 listening .. +1 speaking)
-    let agentLvl = 0, userLvl = 0, dir = 0, corePulse = 0;
+    // Per-viewer conveniences only; the page works without storage.
+    const store = {
+      get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+      set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+    };
+    $("name").value = store.get("pva.name") || "";
+    if (store.get("pva.theme")) document.documentElement.dataset.theme = store.get("pva.theme");
+    transcriptOpen = store.get("pva.transcript") === "1";
 
-    function startOrb() {
-      $("orbWrap").classList.remove("hidden");
-      const canvas = $("orb");
-      const ctx = canvas.getContext("2d");
-      const W = canvas.width, H = canvas.height, cx = W / 2, cy = H / 2;
-      const coreR = 46, maxR = 180;
-
-      function loop(t) {
-        rafId = requestAnimationFrame(loop);
-
-        // Read raw levels (0..~1), smooth them.
-        const a = agentAnalyser ? agentAnalyser.calculateVolume() : 0;
-        const u = localAnalyser ? localAnalyser.calculateVolume() : 0;
-        agentLvl += (a - agentLvl) * 0.25;
-        userLvl  += (u - userLvl) * 0.25;
-
-        // Decide mode: agent speaking wins, else listening if user audible, else idle.
-        const speaking = agentLvl > 0.012 && agentLvl >= userLvl;
-        const listening = !speaking && userLvl > 0.02;
-        const target = speaking ? 1 : (listening ? -1 : 0);
-        dir += (target - dir) * 0.12;
-
-        const lvl = speaking ? agentLvl : listening ? userLvl : 0;
-        corePulse += (lvl - corePulse) * 0.2;
-
-        // Colors per mode (speaking = cool blue, listening = warm teal/amber).
-        const speakC = [99, 140, 255];
-        const listenC = [52, 211, 170];
-        const idleC = [120, 130, 150];
-        const mix = (dir + 1) / 2; // 0 listen .. 1 speak
-        let col;
-        if (Math.abs(dir) < 0.05) col = idleC;
-        else col = listenC.map((v, i) => Math.round(v + (speakC[i] - v) * mix));
-        const rgb = `${col[0]},${col[1]},${col[2]}`;
-
-        // Spawn pulse rings, faster/brighter with more volume.
-        const interval = 520 - Math.min(380, lvl * 1400);
-        if ((speaking || listening) && t - lastSpawn > interval) {
-          lastSpawn = t;
-          rings.push({
-            // outward: start at core, grow out. inward: start outside, shrink in.
-            r: speaking ? coreR : maxR,
-            out: speaking,
-            life: 1,
-            strength: Math.min(1, 0.4 + lvl * 3),
-          });
-        }
-
-        ctx.clearRect(0, 0, W, H);
-
-        // Update + draw rings.
-        for (let i = rings.length - 1; i >= 0; i--) {
-          const ring = rings[i];
-          const speed = 1.6 + ring.strength * 2.2;
-          ring.r += ring.out ? speed : -speed;
-          ring.life -= 0.012;
-          const fadedOut = ring.out ? ring.r > maxR : ring.r < coreR;
-          if (ring.life <= 0 || fadedOut) { rings.splice(i, 1); continue; }
-          ctx.beginPath();
-          ctx.arc(cx, cy, ring.r, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(${rgb},${(ring.life * ring.strength * 0.5).toFixed(3)})`;
-          ctx.lineWidth = 2 + ring.strength * 2;
-          ctx.stroke();
-        }
-
-        // Core orb: gentle idle breathing + reactive bump.
-        const breathe = 1 + Math.sin(t / 900) * 0.04;
-        const r = coreR * breathe + corePulse * 70;
-        const grad = ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r);
-        grad.addColorStop(0, `rgba(${rgb},0.95)`);
-        grad.addColorStop(1, `rgba(${rgb},0.15)`);
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.fillStyle = grad;
-        ctx.shadowColor = `rgba(${rgb},0.6)`;
-        ctx.shadowBlur = 30 + corePulse * 120;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        $("orbLabel").textContent = speaking ? "agent speaking" : listening ? "listening" : "idle";
-      }
-      rafId = requestAnimationFrame(loop);
+    /* ---------- status / banner ---------- */
+    function setStatus(text, cls) {
+      $("statusText").textContent = text;
+      $("dot").className = "dot" + (cls ? " " + cls : "");
+    }
+    function showBanner(html, kind) {
+      const b = $("banner");
+      b.className = "banner" + (kind ? " " + kind : "");
+      b.innerHTML = html;
+      b.hidden = false;
+    }
+    function hideBanner() { $("banner").hidden = true; }
+    function friendlyError(err) {
+      const name = err && err.name, msg = (err && err.message) || String(err);
+      if (name === "NotAllowedError" || name === "SecurityError")
+        return "Microphone access was blocked — allow it for this site in the address bar and try again." +
+          (location.hostname !== "localhost" && location.protocol !== "https:"
+            ? "<br>Browsers only allow the mic on <code>localhost</code> or HTTPS." : "");
+      if (name === "NotFoundError") return "No microphone found. Plug one in and try again.";
+      if (/token server/.test(msg)) return "Couldn't get a session token. Is <code>./stack.sh</code> running?";
+      if (/could not establish|signal|websocket|Failed to fetch/i.test(msg))
+        return "Couldn't reach the LiveKit server. Is <code>./stack.sh</code> running?";
+      return "Something went wrong: " + msg;
     }
 
-    function stopOrb() {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = null;
-      rings.length = 0;
+    /* ---------- the aura ---------- */
+    // Each state gets two colours; blobs alternate between them. Motion
+    // parameters per state: swirl speed, drift radius, base size, audio gain.
+    const STATES = {
+      idle:       { c: [[86, 140, 235], [150, 118, 230]],  swirl: 0.25, drift: 0.07, size: 0.62, gain: 0 },
+      connecting: { c: [[96, 150, 220], [150, 120, 220]],  swirl: 0.9,  drift: 0.10, size: 0.54, gain: 0 },
+      listening:  { c: [[31, 213, 249], [40, 120, 255]],   swirl: 0.35, drift: 0.07, size: 0.66, gain: 0.9 },
+      thinking:   { c: [[168, 85, 247], [236, 72, 153]],   swirl: 1.6,  drift: 0.10, size: 0.56, gain: 0 },
+      speaking:   { c: [[31, 213, 249], [99, 102, 241]],   swirl: 0.6,  drift: 0.06, size: 0.70, gain: 1.6 },
+    };
+    const LABELS = {
+      idle: "", connecting: "Connecting…", waiting: "Waking up the assistant…",
+      listening: "Listening", muted: "You're muted", thinking: "Thinking", speaking: "Speaking",
+    };
+
+    let agentAnalyser = null, localAnalyser = null;
+    let agentLvl = 0, userLvl = 0;
+    const cur = { c: STATES.idle.c.map((x) => x.slice()), swirl: .25, drift: .07, size: .62, gain: 0 };
+
+    function mode() {
+      if (!room) return connecting ? "connecting" : "idle";
+      if (!agentJoined || !agentState || agentState === "initializing") return "connecting";
+      return agentState in STATES ? agentState : "listening";
+    }
+    function labelKey(m) {
+      if (m === "connecting" && room) return "waiting";
+      if (m === "listening" && room && !room.localParticipant.isMicrophoneEnabled) return "muted";
+      return m;
+    }
+
+    (function auraLoop() {
+      const cv = $("aura"), ctx = cv.getContext("2d");
+      const W = cv.width, cx = W / 2, cy = W / 2;
+      // Fixed blob personalities so the motion looks organic, not mechanical.
+      const blobs = [0, 1, 2, 3, 4].map((i) => ({ ph: i * 1.7, sp: 0.6 + i * 0.17, rr: 0.75 + (i % 3) * 0.12, ci: i % 2 }));
+      const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      let t = 0, last = performance.now(), lastLabel = null;
+      const meters = document.querySelectorAll(".meter i");
+
+      function frame(now) {
+        requestAnimationFrame(frame);
+        const dt = Math.min(0.05, (now - last) / 1000); last = now;
+
+        agentLvl += ((agentAnalyser ? agentAnalyser.calculateVolume() : 0) - agentLvl) * 0.3;
+        userLvl  += ((localAnalyser ? localAnalyser.calculateVolume() : 0) - userLvl) * 0.3;
+
+        const m = mode(), s = STATES[m];
+        const k = 0.06;  // ease toward the state's look
+        for (let i = 0; i < 2; i++) for (let j = 0; j < 3; j++) cur.c[i][j] += (s.c[i][j] - cur.c[i][j]) * k;
+        cur.swirl += (s.swirl - cur.swirl) * k;
+        cur.drift += (s.drift - cur.drift) * k;
+        cur.size  += (s.size - cur.size) * k;
+        cur.gain  += (s.gain - cur.gain) * k;
+
+        const lvl = m === "speaking" ? agentLvl : m === "listening" ? userLvl : 0;
+        t += dt * (reduce ? 0.2 : cur.swirl) * (1 + lvl * 3);
+        const breathe = m === "thinking" ? Math.sin(now / 260) * 0.05 : Math.sin(now / 1400) * 0.03;
+        const R = W * 0.5 * (cur.size + breathe + Math.min(0.22, lvl * cur.gain));
+
+        ctx.clearRect(0, 0, W, W);
+        const dark = getComputedStyle(document.documentElement).colorScheme === "dark";
+        ctx.globalCompositeOperation = dark ? "lighter" : "source-over";
+        const alpha = dark ? 0.75 : 0.55;
+        const edge = W * 0.47;  // keep every blob inside the canvas so the CSS blur never shows a hard edge
+        const blob = (x, y, r, rgb, a) => {
+          const d = Math.hypot(x - cx, y - cy);
+          r = Math.min(r, edge - d);
+          if (r <= 0) return;
+          const [cr, cg, cb] = rgb.map(Math.round);
+          const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+          g.addColorStop(0, `rgba(${cr},${cg},${cb},${a})`);
+          g.addColorStop(0.6, `rgba(${cr},${cg},${cb},${a * 0.5})`);
+          g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+          ctx.fillStyle = g;
+          ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+        };
+        blob(cx, cy, R * 0.85, cur.c[0], alpha * 0.8);
+        for (const b of blobs) {
+          const a = t * b.sp + b.ph;
+          const x = cx + Math.cos(a) * W * cur.drift * (0.6 + 0.4 * Math.sin(a * 0.7));
+          const y = cy + Math.sin(a * 1.3) * W * cur.drift * (0.6 + 0.4 * Math.cos(a * 0.5));
+          blob(x, y, R * b.rr * 0.8, cur.c[b.ci], alpha * 0.6);
+        }
+        // Bright core that swells with speech.
+        const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.45);
+        core.addColorStop(0, `rgba(255,255,255,${((dark ? 0.10 : 0.25) + Math.min(0.35, lvl * 2.5)).toFixed(3)})`);
+        core.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.fillStyle = core;
+        ctx.beginPath(); ctx.arc(cx, cy, R * 0.45, 0, Math.PI * 2); ctx.fill();
+
+        // Your-mic meter in the mute button.
+        const ul = Math.min(1, userLvl * 6);
+        meters.forEach((el, i) => { el.style.height = (4 + ul * 14 * [0.6, 1, 0.8, 0.5][i] * (0.7 + Math.random() * 0.3)) + "px"; });
+
+        const key = labelKey(m);
+        if (key !== lastLabel) { lastLabel = key; $("stateLabel").textContent = LABELS[key] || ""; }
+      }
+      requestAnimationFrame(frame);
+    })();
+
+    /* ---------- transcript + captions ---------- */
+    function applyTranscriptView() {
+      const inCall = !!room || connecting;
+      $("shell").classList.toggle("with-transcript", inCall && transcriptOpen);
+      $("transcript").hidden = !(inCall && transcriptOpen);
+      $("chatBtn").setAttribute("aria-pressed", String(transcriptOpen));
+      $("chatBtn").setAttribute("aria-label", transcriptOpen ? "Hide transcript (T)" : "Show transcript (T)");
+      if (transcriptOpen) $("transcript").scrollTop = $("transcript").scrollHeight;
+    }
+    function upsertSegment(seg, who) {
+      if (!seg.text.trim()) return;
+      $("empty").hidden = true;
+      let el = segEls.get(seg.id);
+      if (!el) {
+        el = document.createElement("div");
+        el.className = "msg " + who;
+        $("transcript").appendChild(el);
+        segEls.set(seg.id, el);
+      }
+      el.textContent = seg.text;
+      el.classList.toggle("interim", !seg.final);
+      const tr = $("transcript");
+      if (tr.scrollHeight - tr.scrollTop - tr.clientHeight < 120) tr.scrollTop = tr.scrollHeight;
+      // Caption: the latest line from either side.
+      $("caption").textContent = seg.text;
+      $("caption").className = who === "user" ? "user" : "";
+    }
+    function resetTranscript() {
+      segEls.clear();
+      $("transcript").querySelectorAll(".msg").forEach((el) => el.remove());
+      $("empty").hidden = false;
+      $("caption").textContent = "";
+    }
+
+    /* ---------- agent tracking ---------- */
+    const isAgent = (p) => p && p.kind === ParticipantKind.AGENT;
+    function readAgentAttributes(p) {
+      const a = p.attributes || {};
+      if (a["lk.agent.state"]) agentState = a["lk.agent.state"];
+      // Which LLM backend is answering (published by agent.py), e.g. "FLM · NPU".
+      if (a["pva.llm"]) { $("llmPill").textContent = a["pva.llm"]; $("llmPill").hidden = false; }
+    }
+    function agentArrived(p) {
+      agentJoined = true;
+      clearTimeout(agentTimer);
+      hideBanner();
+      setStatus("Live", "live");
+      readAgentAttributes(p);
+    }
+
+    /* ---------- call lifecycle ---------- */
+    function setInCall(on) {
+      $("shell").classList.toggle("idle", !on);
+      $("welcome").hidden = on;
+      $("dock").hidden = !on;
+      applyTranscriptView();
+    }
+    function startClock() {
+      const start = Date.now();
+      const tick = () => {
+        const s = Math.floor((Date.now() - start) / 1000);
+        $("timer").textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+      };
+      tick(); clockTimer = setInterval(tick, 1000);
+    }
+    function teardown() {
+      clearTimeout(agentTimer); clearInterval(clockTimer);
       try { agentAnalyser && agentAnalyser.cleanup(); } catch {}
       try { localAnalyser && localAnalyser.cleanup(); } catch {}
       agentAnalyser = localAnalyser = null;
-      $("orbWrap").classList.add("hidden");
-    }
-
-    function setStatus(text, cls) {
-      statusText.textContent = text;
-      dot.className = "dot" + (cls ? " " + cls : "");
-    }
-
-    function addMsg(text, who) {
-      // Coalesce consecutive updates from the same speaker (streaming transcriptions)
-      const last = transcript.lastElementChild;
-      if (last && last.dataset.who === who && last.dataset.streaming === "1") {
-        last.textContent = text;
-      } else {
-        const el = document.createElement("div");
-        el.className = "msg " + who;
-        el.dataset.who = who;
-        el.dataset.streaming = "1";
-        el.textContent = text;
-        transcript.appendChild(el);
-      }
-      transcript.scrollTop = transcript.scrollHeight;
+      audioEls.forEach((el) => el.remove()); audioEls.clear();
+      room = null; connecting = false; agentJoined = false; agentState = null;
+      $("llmPill").hidden = true;
+      $("caption").textContent = "";
+      setMuted(false);
+      setInCall(false);
     }
 
     async function connect() {
+      if (room || connecting) return;
+      connecting = true;
+      $("connectBtn").disabled = true;
+      hideBanner();
+      resetTranscript();
+      setInCall(true);
+      setStatus("Connecting", "connecting");
       try {
-        setStatus("Requesting token…", "connecting");
+        store.set("pva.name", $("name").value.trim());
         const qs = new URLSearchParams();
         const fields = {
-          identity: $("identity").value.trim(),
-          room: $("room").value.trim(),
-          name: $("name").value.trim(),
-          mobile_number: $("mobile").value.trim(),
-          language: $("language").value,
+          identity: $("identity").value.trim(), room: $("room").value.trim(), name: $("name").value.trim(),
+          mobile_number: $("mobile").value.trim(), language: $("language").value,
         };
         for (const [k, v] of Object.entries(fields)) if (v) qs.set(k, v);
 
-        const res = await fetch(`${TOKEN_ENDPOINT}?${qs}`);
+        let res;
+        try { res = await fetch(`${TOKEN_ENDPOINT}?${qs}`); } catch { throw new Error("token server unreachable"); }
         if (!res.ok) throw new Error("token server error " + res.status);
-        const { token, url, room: joinedRoom } = await res.json();
+        const { token, url } = await res.json();
 
-        setStatus("Connecting to " + joinedRoom + "…", "connecting");
-        room = new Room({ adaptiveStream: true, dynacast: true });
+        const r = new Room({ adaptiveStream: true, dynacast: true });
 
-        // Play agent audio + drive the "speaking" (outward) pulse from it
-        room.on(RoomEvent.TrackSubscribed, (track) => {
-          if (track.kind === Track.Kind.Audio) {
-            const el = track.attach();
-            el.autoplay = true;
-            document.body.appendChild(el);
+        r.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+          if (track.kind !== Track.Kind.Audio) return;
+          const el = track.attach();
+          document.body.appendChild(el);
+          audioEls.add(el);
+          if (isAgent(participant)) {
             try { agentAnalyser = createAudioAnalyser(track, { smoothingTimeConstant: 0.6 }); } catch (e) { console.warn(e); }
           }
         });
-
-        room.on(RoomEvent.TrackUnsubscribed, (track) => {
-          if (track.kind === Track.Kind.Audio && agentAnalyser) {
-            try { agentAnalyser.cleanup(); } catch {}
-            agentAnalyser = null;
+        r.on(RoomEvent.TrackUnsubscribed, (track, _pub, participant) => {
+          track.detach().forEach((el) => { el.remove(); audioEls.delete(el); });
+          if (isAgent(participant) && agentAnalyser) { try { agentAnalyser.cleanup(); } catch {} agentAnalyser = null; }
+        });
+        r.on(RoomEvent.ParticipantConnected, (p) => { if (isAgent(p)) agentArrived(p); });
+        r.on(RoomEvent.ParticipantDisconnected, (p) => {
+          if (!isAgent(p)) return;
+          agentJoined = false; agentState = null;
+          setStatus("Assistant left", "error");
+          showBanner("The assistant left the call. End it and start a new one.", "info");
+        });
+        r.on(RoomEvent.ParticipantAttributesChanged, (_c, p) => { if (isAgent(p)) readAgentAttributes(p); });
+        r.on(RoomEvent.TranscriptionReceived, (segments, participant) => {
+          const who = participant && participant.identity === r.localParticipant.identity ? "user" : "bot";
+          segments.forEach((s) => upsertSegment(s, who));
+        });
+        r.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+          if (!r.canPlaybackAudio) {
+            showBanner('Your browser blocked audio playback.<br><button id="unlockAudio">Enable audio</button>', "info");
+            $("unlockAudio").onclick = () => r.startAudio().then(hideBanner);
           }
         });
+        r.on(RoomEvent.Disconnected, () => { setStatus("Local", ""); teardown(); });
 
-        // Live transcriptions (agent STT + bot replies)
-        room.on(RoomEvent.TranscriptionReceived, (segments, participant) => {
-          const isLocal = participant && participant.identity === room.localParticipant.identity;
-          const text = segments.map((s) => s.text).join(" ");
-          if (text.trim()) addMsg(text, isLocal ? "user" : "bot");
-          // mark final segments so the next one starts a new bubble
-          if (segments.every((s) => s.final)) {
-            const last = transcript.lastElementChild;
-            if (last) last.dataset.streaming = "0";
-          }
-        });
-
-        room.on(RoomEvent.Disconnected, () => {
-          stopOrb();
-          setStatus("Disconnected", "");
-          $("form").classList.remove("hidden");
-          $("disconnectBtn").classList.add("hidden");
-        });
-
-        await room.connect(url, token);
-        await room.localParticipant.setMicrophoneEnabled(true);
-
-        // Drive the "listening" (inward) pulse from the local mic
-        const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+        await r.connect(url, token);
+        room = r;
+        connecting = false;
+        await r.localParticipant.setMicrophoneEnabled(true);
+        const micPub = r.localParticipant.getTrackPublication(Track.Source.Microphone);
         if (micPub && micPub.track) {
-          try { localAnalyser = createAudioAnalyser(micPub.track, { smoothingTimeConstant: 0.6 }); } catch (e) { console.warn(e); }
+          try { localAnalyser = createAudioAnalyser(micPub.track, { smoothingTimeConstant: 0.5 }); } catch (e) { console.warn(e); }
         }
+        startClock();
 
-        startOrb();
-        setStatus("Live in " + joinedRoom + " — start talking", "live");
-        $("form").classList.add("hidden");
-        $("disconnectBtn").classList.remove("hidden");
+        const existing = [...r.remoteParticipants.values()].find(isAgent);
+        if (existing) agentArrived(existing);
+        else {
+          setStatus("Waiting for assistant", "connecting");
+          agentTimer = setTimeout(() => {
+            if (!agentJoined) showBanner(
+              "The assistant hasn't joined yet. Check that the agent and dispatcher are running " +
+              "(<code>./stack.sh</code>) and look at <code>logs/agent.log</code>.", "info");
+          }, AGENT_JOIN_TIMEOUT_MS);
+        }
       } catch (err) {
         console.error(err);
-        setStatus("Error: " + err.message, "error");
+        const r = room; teardown();
+        if (r) { try { await r.disconnect(); } catch {} }
+        setStatus("Error", "error");
+        showBanner(friendlyError(err));
+      } finally {
+        $("connectBtn").disabled = false;
       }
     }
 
-    async function disconnect() {
-      if (room) await room.disconnect();
+    function setMuted(muted) {
+      const b = $("muteBtn");
+      b.classList.toggle("off", muted);
+      b.setAttribute("aria-label", muted ? "Unmute microphone (M)" : "Mute microphone (M)");
+      $("micOn").hidden = muted;
+      $("micOff").hidden = !muted;
+    }
+    async function toggleMute() {
+      if (!room) return;
+      const enabled = room.localParticipant.isMicrophoneEnabled;
+      await room.localParticipant.setMicrophoneEnabled(!enabled);
+      setMuted(enabled);
+    }
+    function toggleTranscript() {
+      transcriptOpen = !transcriptOpen;
+      store.set("pva.transcript", transcriptOpen ? "1" : "0");
+      applyTranscriptView();
     }
 
     $("connectBtn").onclick = connect;
-    $("disconnectBtn").onclick = disconnect;
+    $("name").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+    $("muteBtn").onclick = toggleMute;
+    $("chatBtn").onclick = toggleTranscript;
+    $("endBtn").onclick = () => room && room.disconnect();
+    $("themeBtn").onclick = () => {
+      const dark = getComputedStyle(document.documentElement).colorScheme === "dark";
+      document.documentElement.dataset.theme = dark ? "light" : "dark";
+      store.set("pva.theme", document.documentElement.dataset.theme);
+    };
+    document.addEventListener("keydown", (e) => {
+      if (!room || e.target.closest("input, select, textarea")) return;
+      if (e.key === "m" || e.key === "M") toggleMute();
+      if (e.key === "t" || e.key === "T") toggleTranscript();
+    });
   </script>
 </body>
 </html>

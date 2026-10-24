@@ -5,6 +5,7 @@ import uuid
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from livekit.api import AccessToken, VideoGrants
 from dotenv import load_dotenv
 import uvicorn
@@ -22,6 +23,8 @@ if not API_KEY or not API_SECRET:
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 app = FastAPI()
+# Vendored livekit-client (pinned) so the page works with no internet access.
+app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")
 
 
 @app.get("/token")
